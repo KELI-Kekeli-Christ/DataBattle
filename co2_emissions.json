@@ -1,0 +1,7 @@
+{
+  "training_kg_co2": 4.845805922623378e-07,
+  "inference_kg_co2": 2.1623245618107487e-06,
+  "training_energy_kwh": null,
+  "inference_energy_kwh": null,
+  "description": "\u00c9missions CO\u2082 pour l'entra\u00eenement et l'inf\u00e9rence sur le jeu de test"
+}
