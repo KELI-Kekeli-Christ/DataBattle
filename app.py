@@ -6,7 +6,6 @@ import json
 import joblib
 import xgboost as xgb
 from datetime import datetime, timedelta
-from tensorflow.keras.models import load_model
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -155,7 +154,7 @@ def load_dashboard_data():
 
 @st.cache_resource
 def load_models():
-    """Charge les modèles ML pour les prédictions (charge les modèles disponibles)"""
+    """Charge les modèles ML pour les prédictions"""
     models_dict = {}
     
     try:
@@ -171,43 +170,10 @@ def load_models():
             'xgb_high': model_high,
             'xgb_cluster': cluster_models,
         })
+        return models_dict
     except Exception as e:
         st.error(f"❌ Erreur critique : les modèles XGBoost n'ont pas pu être chargés : {e}")
         return None
-    
-    # Charger les modèles LSTM (optionnels)
-    lstm_available = False
-    try:
-        lstm_model = load_model('lstm_model_improved.h5')
-        scaler_lstm = joblib.load('lstm_scaler_x.pkl')
-        scaler_alert = joblib.load('lstm_scaler_alert.pkl')
-        kmeans = joblib.load('lstm_kmeans.pkl')
-        
-        models_dict.update({
-            'lstm': lstm_model,
-            'scaler_lstm': scaler_lstm,
-            'scaler_alert': scaler_alert,
-            'kmeans': kmeans,
-        })
-        lstm_available = True
-    except FileNotFoundError:
-        models_dict.update({
-            'lstm': None,
-            'scaler_lstm': None,
-            'scaler_alert': None,
-            'kmeans': None,
-        })
-        st.info("ℹ️ Modèles LSTM non disponibles : les prédictions utilisent uniquement XGBoost")
-    except Exception as e:
-        models_dict.update({
-            'lstm': None,
-            'scaler_lstm': None,
-            'scaler_alert': None,
-            'kmeans': None,
-        })
-        st.info(f"ℹ️ Modèles LSTM non disponibles : {e}")
-    
-    return models_dict
 
 (predictions_val, co2, cluster_stats, theta_results,
  feature_importance, confidence_dist, valid_snapshots, predictions_test) = load_dashboard_data()
