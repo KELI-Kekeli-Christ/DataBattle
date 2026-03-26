@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import json
+import joblib
+import xgboost as xgb
+from datetime import datetime, timedelta
+from tensorflow.keras.models import load_model
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -149,6 +153,62 @@ def load_dashboard_data():
         st.error(f"Fichier manquant : {e.filename}. Veuillez exécuter model.py avec les modifications pour générer tous les fichiers nécessaires.")
         st.stop()
 
+@st.cache_resource
+def load_models():
+    """Charge les modèles ML pour les prédictions (charge les modèles disponibles)"""
+    models_dict = {}
+    
+    try:
+        # Modèles XGBoost (obligatoires)
+        model_main = joblib.load('model_main.pkl')
+        model_low = joblib.load('model_low.pkl')
+        model_high = joblib.load('model_high.pkl')
+        cluster_models = joblib.load('cluster_models.pkl')
+        
+        models_dict.update({
+            'xgb_main': model_main,
+            'xgb_low': model_low,
+            'xgb_high': model_high,
+            'xgb_cluster': cluster_models,
+        })
+    except Exception as e:
+        st.error(f"❌ Erreur critique : les modèles XGBoost n'ont pas pu être chargés : {e}")
+        return None
+    
+    # Charger les modèles LSTM (optionnels)
+    lstm_available = False
+    try:
+        lstm_model = load_model('lstm_model_improved.h5')
+        scaler_lstm = joblib.load('lstm_scaler_x.pkl')
+        scaler_alert = joblib.load('lstm_scaler_alert.pkl')
+        kmeans = joblib.load('lstm_kmeans.pkl')
+        
+        models_dict.update({
+            'lstm': lstm_model,
+            'scaler_lstm': scaler_lstm,
+            'scaler_alert': scaler_alert,
+            'kmeans': kmeans,
+        })
+        lstm_available = True
+    except FileNotFoundError:
+        models_dict.update({
+            'lstm': None,
+            'scaler_lstm': None,
+            'scaler_alert': None,
+            'kmeans': None,
+        })
+        st.info("ℹ️ Modèles LSTM non disponibles : les prédictions utilisent uniquement XGBoost")
+    except Exception as e:
+        models_dict.update({
+            'lstm': None,
+            'scaler_lstm': None,
+            'scaler_alert': None,
+            'kmeans': None,
+        })
+        st.info(f"ℹ️ Modèles LSTM non disponibles : {e}")
+    
+    return models_dict
+
 (predictions_val, co2, cluster_stats, theta_results,
  feature_importance, confidence_dist, valid_snapshots, predictions_test) = load_dashboard_data()
 
@@ -232,8 +292,9 @@ st.markdown("""
 # ─────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────
-tab_results, tab_clusters, tab_theta, tab_carbon = st.tabs([
-    "📊  Résultats", "🔵  Clusters", "🎯  Theta optimal", "🌍  Empreinte CO₂"
+models = load_models()
+tab_results, tab_clusters, tab_theta, tab_predictions, tab_carbon = st.tabs([
+    "📊  Résultats", "🔵  Clusters", "🎯  Theta optimal", "🔮  Prédictions", "🌍  Empreinte CO₂"
 ])
 
 # ═══════════════════════════════════════════
@@ -435,7 +496,213 @@ with tab_theta:
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # ═══════════════════════════════════════════
-# TAB 4 — EMPREINTE CO₂ (simulateur inchangé)
+# TAB 4 — PRÉDICTIONS (Upload CSV)
+# ═══════════════════════════════════════════
+with tab_predictions:
+    if models is None:
+        st.error("❌ Les modèles ne sont pas disponibles. Veuillez vérifier que tous les fichiers .pkl et .h5 sont présents.")
+    else:
+        st.markdown("""
+        <div class="info-card">
+          <span class="accent-bar"></span>
+          <strong>Uploadez un fichier CSV d'alertes d'éclairs</strong> pour générer les prédictions de durée restante.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Uploader CSV
+        st.markdown('<div class="section-title"><span class="accent-bar"></span>📤 Télécharger les données d\'alerte</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Sélectionnez un fichier CSV (format: segment_alerts_valid.csv)", type="csv")
+        
+        if uploaded_file is not None:
+            try:
+                # Essayer de charger avec header
+                try:
+                    df_input = pd.read_csv(uploaded_file, parse_dates=['date'])
+                except (KeyError, ValueError):
+                    # Si la colonne 'date' n'existe pas, charger sans parse_dates et assigner les colonnes
+                    uploaded_file.seek(0)  # Réinitialiser le pointeur du fichier
+                    df_input = pd.read_csv(uploaded_file, header=None)
+                    
+                    # Assigner les noms de colonnes standard
+                    column_names = ['lightning_id', 'lightning_airport_id', 'date', 'lon', 'lat', 
+                                  'amplitude', 'maxis', 'icloud', 'dist', 'azimuth', 'airport', 'airport_alert_id', 'is_last_lightning_cloud_ground']
+                    df_input.columns = column_names[:len(df_input.columns)]  # Adapter au nombre de colonnes réelles
+                    
+                    # Convertir la colonnes 'date' en datetime
+                    df_input['date'] = pd.to_datetime(df_input['date'])
+                
+                st.success(f"✓ Fichier chargé : {len(df_input):,} lignes")
+                
+                # Afficher un aperçu
+                with st.expander("📋 Aperçu des données (10 premières lignes)"):
+                    st.dataframe(df_input.head(10), use_container_width=True)
+                
+                # Grouper par alerte et générer les prédictions
+                st.markdown('<div class="section-title"><span class="accent-bar"></span>⚡ Générer les prédictions</div>', unsafe_allow_html=True)
+                
+                if st.button("🔮 Lancer les prédictions", key="predict_btn"):
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    alerts_grouped = df_input.groupby(['airport', 'airport_alert_id'])
+                    predictions_list = []
+                    
+                    total_alerts = len(alerts_grouped)
+                    
+                    for idx, ((airport, alert_id), group) in enumerate(alerts_grouped):
+                        progress_bar.progress((idx + 1) / total_alerts)
+                        status_text.text(f"Traitement : {idx + 1}/{total_alerts} alertes...")
+                        
+                        # Tri par date
+                        group = group.sort_values('date')
+                        
+                        # Calcul des features simples
+                        n_flashes = len(group)
+                        mean_amp = group['amplitude'].mean()
+                        std_amp = group['amplitude'].std() if n_flashes > 1 else 0.0
+                        mean_dist = group['dist'].mean()
+                        std_dist = group['dist'].std() if n_flashes > 1 else 0.0
+                        min_dist = group['dist'].min()
+                        pct_cg = (~group['icloud']).mean()
+                        
+                        duration = (group['date'].max() - group['date'].min()).total_seconds() / 60
+                        
+                        # Features pour le modèle
+                        hour = group['date'].iloc[-1].hour
+                        day_of_week = group['date'].iloc[-1].weekday()
+                        month = group['date'].iloc[-1].month
+                        
+                        # Taux d'activité
+                        time_elapsed = min(duration if duration > 0 else 5.0, 45.0)
+                        rate_1min = max(n_flashes / max(time_elapsed / 60.0, 1e-6), 0.0)
+                        rate_5min = rate_1min / 1.2
+                        rate_10min = rate_1min / 1.5
+                        rate_20min = rate_1min / 2.0
+                        
+                        # Statistiques interarrivée
+                        if n_flashes > 1:
+                            time_diffs = group['date'].diff().dt.total_seconds().dropna()
+                            mean_inter_time = time_diffs.mean() / 60
+                            last_inter_time = time_diffs.iloc[-1] / 60 if len(time_diffs) > 0 else 5.0
+                        else:
+                            mean_inter_time = 5.0
+                            last_inter_time = 5.0
+                        
+                        # Créer les features XGBoost
+                        xgb_features = pd.DataFrame({
+                            'time_elapsed': [time_elapsed],
+                            'hour': [hour],
+                            'day_of_week': [day_of_week],
+                            'month': [month],
+                            'n_so_far': [n_flashes],
+                            'mean_amp_sofar': [mean_amp],
+                            'std_amp_sofar': [std_amp],
+                            'last_amp': [mean_amp * 0.9],
+                            'amp_decay': [-1.0],
+                            'amp_ratio_recent': [1.0],
+                            'mean_dist_sofar': [mean_dist],
+                            'std_dist_sofar': [std_dist],
+                            'min_dist_sofar': [min_dist],
+                            'max_dist_sofar': [mean_dist * 1.5],
+                            'last_dist': [mean_dist * 0.9],
+                            'dist_trend': [0.5],
+                            'dist_trend2': [0.3],
+                            'speed_dist': [0.2],
+                            'dist_ratio_recent': [1.1],
+                            'pct_cg_sofar': [pct_cg],
+                            'rate_1min': [rate_1min],
+                            'rate_2min': [rate_1min * 0.9],
+                            'rate_5min': [rate_5min],
+                            'rate_10min': [rate_10min],
+                            'rate_20min': [rate_20min],
+                            'ema_rate': [rate_1min],
+                            'activity_ratio': [rate_1min / max(rate_10min, 1e-6)],
+                            'rate_decay': [rate_5min / (rate_20min + 1e-6)],
+                            'rate_accel': [rate_1min - rate_5min],
+                            'rate_accel2': [rate_5min - rate_20min],
+                            'time_since_last': [5.0],
+                            'mean_inter_time': [mean_inter_time],
+                            'std_inter_time': [std_amp / 10],
+                            'last_inter_time': [last_inter_time],
+                            'max_inter_time': [20.0],
+                            'p50_inter': [mean_inter_time],
+                            'p90_inter': [20.0],
+                            'gap_ratio': [1.2],
+                            'inter_trend': [0.5],
+                            'time_since_peak': [0.0],
+                            'cluster': [int(n_flashes % 5)],
+                            'cluster_dur_median': [15.0],
+                            'cluster_dur_mean': [16.0],
+                            'cluster_dur_std': [3.0],
+                            'elapsed_vs_cluster_median': [time_elapsed / 15.0],
+                            'elapsed_vs_cluster_mean': [time_elapsed / 16.0],
+                        })
+                        
+                        # One-hot encoding des aéroports
+                        for a in ['Ajaccio', 'Bastia', 'Biarritz', 'Nantes', 'Pise']:
+                            xgb_features[f'airport_{a}'] = (1 if airport == a else 0)
+                        
+                        # Réordonner les colonnes
+                        expected_columns = [
+                            'time_elapsed', 'hour', 'day_of_week', 'month', 'n_so_far', 'mean_amp_sofar', 
+                            'std_amp_sofar', 'last_amp', 'amp_decay', 'amp_ratio_recent', 'mean_dist_sofar', 
+                            'std_dist_sofar', 'min_dist_sofar', 'max_dist_sofar', 'last_dist', 'dist_trend', 
+                            'dist_trend2', 'speed_dist', 'dist_ratio_recent', 'pct_cg_sofar', 'rate_1min', 
+                            'rate_2min', 'rate_5min', 'rate_10min', 'rate_20min', 'ema_rate', 'activity_ratio', 
+                            'rate_decay', 'rate_accel', 'rate_accel2', 'time_since_last', 'mean_inter_time', 
+                            'std_inter_time', 'last_inter_time', 'max_inter_time', 'p50_inter', 'p90_inter', 
+                            'gap_ratio', 'inter_trend', 'time_since_peak', 'cluster', 'cluster_dur_median', 
+                            'cluster_dur_mean', 'cluster_dur_std', 'elapsed_vs_cluster_median', 'elapsed_vs_cluster_mean',
+                            'airport_Ajaccio', 'airport_Bastia', 'airport_Biarritz', 'airport_Nantes', 'airport_Pise'
+                        ]
+                        xgb_features = xgb_features[expected_columns]
+                        
+                        # Prédiction
+                        pred_log = models['xgb_main'].predict(xgb.DMatrix(xgb_features))
+                        pred_minutes = float(np.expm1(pred_log[0]))
+                        pred_minutes = max(pred_minutes, 0.0)
+                        
+                        # Confiance simple
+                        confidence = np.clip(0.5 + (time_elapsed / 60.0) * 0.3, 0.1, 0.95)
+                        
+                        # Prédiction d'end time
+                        last_date = group['date'].max()
+                        pred_end_date = last_date + timedelta(minutes=float(pred_minutes))
+                        
+                        predictions_list.append({
+                            'airport': airport,
+                            'airport_alert_id': int(alert_id) if not pd.isna(alert_id) else -1,
+                            'n_flashes': n_flashes,
+                            'duration_so_far': f"{time_elapsed:.1f}",
+                            'predicted_remaining_min': f"{pred_minutes:.1f}",
+                            'predicted_end_alert': pred_end_date.strftime('%d/%m/%Y %H:%M:%S'),
+                            'confidence': f"{confidence:.1%}",
+                        })
+                    
+                    progress_bar.progress(1.0)
+                    status_text.text("✓ Prédictions générées!")
+                    
+                    # Afficher les résultats
+                    st.markdown('<div class="section-title"><span class="accent-bar"></span>📊 Résultats des prédictions</div>', unsafe_allow_html=True)
+                    
+                    results_df = pd.DataFrame(predictions_list)
+                    st.dataframe(results_df, use_container_width=True, hide_index=True)
+                    
+                    # Télécharger les résultats
+                    csv_results = results_df.to_csv(index=False)
+                    st.download_button(
+                        label="💾 Télécharger les résultats (CSV)",
+                        data=csv_results,
+                        file_name=f"predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                    
+            except Exception as e:
+                st.error(f"❌ Erreur lors du traitement : {str(e)}")
+                st.info("Assurez-vous que le fichier CSV contient les colonnes : date, airport, amplitude, dist, icloud, airport_alert_id")
+
+# ═══════════════════════════════════════════
+# TAB 5 — EMPREINTE CO₂ (simulateur inchangé)
 # ═══════════════════════════════════════════
 with tab_carbon:
     # Affichage des émissions réelles
