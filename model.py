@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -9,10 +11,12 @@ from sklearn.metrics import mean_absolute_error
 import warnings
 warnings.filterwarnings('ignore')
 import joblib  # pour sauvegarder les modèles
+from codecarbon import EmissionsTracker
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
+tracker = EmissionsTracker(project_name="orages_prediction", measure_power_secs=10)
 QUANTILE_LOW  = 0.10
 QUANTILE_HIGH = 0.95
 
@@ -443,6 +447,8 @@ print("\n" + "=" * 70)
 print("8. Entraînement des modèles")
 print("=" * 70)
 
+tracker.start()
+
 def train_booster(params, dtrain, dvalid, num_boost_round=None, early_stopping=50, verbose=False):
     if num_boost_round is None:
         num_boost_round = params.get('n_estimators', 1000)
@@ -510,6 +516,9 @@ for c in sorted(train_snapshots['cluster'].dropna().unique()):
     cluster_models[c] = m
 
     print(f"   Cluster {c} : {n_cluster:,} snapshots")
+
+emissions_training = tracker.stop()
+print(f"\n💡 Émissions CO₂ pour l'entraînement : {emissions_training:.4f} kg CO₂eq")
 
 # Sauvegarde des modèles (optionnel)
 joblib.dump(model_main, 'model_main.pkl')
@@ -734,6 +743,10 @@ print("\n" + "=" * 70)
 print("14. Génération et évaluation sur test étiqueté")
 print("=" * 70)
 
+# Lancer un tracker pour l'inference
+tracker_inf = EmissionsTracker(project_name="orages_inference", measure_power_secs=10)
+tracker_inf.start()
+
 df_test = pd.read_csv('segment_alerts_all_airports_eval.csv', parse_dates=['date'])
 df_test_labeled = df_test[df_test['airport_alert_id'].notna()].copy()
 
@@ -856,17 +869,37 @@ test_snapshots['predicted_date_end_alert'] = (
     pd.to_timedelta(test_snapshots['predicted_remaining'], unit='minutes')
 )
 
+
+# Après avoir calculé test_snapshots et avant de créer predictions_test
+test_snapshots['true_end_alert'] = test_snapshots['snapshot_time'] + pd.to_timedelta(test_snapshots['true_remaining_min'], unit='minutes')
+
 predictions_test = test_snapshots[[
-    'airport', 'alert_id', 'snapshot_time',
+    'airport', 'alert_id', 'snapshot_time', 'true_end_alert',
     'predicted_date_end_alert', 'confidence'
 ]].rename(columns={
     'alert_id': 'airport_alert_id',
-    'snapshot_time': 'prediction_date'
+    'snapshot_time': 'prediction_date',
 })
 
 predictions_test.to_csv('predictions_test.csv', index=False)
 print(f"predictions_test.csv : {len(predictions_test):,} lignes")
 
+emissions_inference = tracker_inf.stop()
+print(f"\n💡 Émissions CO₂ pour l'inférence sur le test : {emissions_inference:.4f} kg CO₂eq")
+
+emissions_data = {
+    "training_kg_co2": emissions_training,
+    "inference_kg_co2": emissions_inference,
+    "training_energy_kwh": None,
+    "inference_energy_kwh": None,
+    "description": "Émissions CO₂ pour l'entraînement et l'inférence sur le jeu de test"
+}
+
+# Sauvegarde
+with open("co2_emissions.json", "w") as f:
+    json.dump(emissions_data, f, indent=2)
+
+print(f"💾 Émissions sauvegardées dans co2_emissions.json")
 # ============================================================
 # 15. ÉVALUATION SUR LE TEST AVEC θ OPTIMAL DE VALIDATION
 # ============================================================
@@ -974,6 +1007,12 @@ if 'best_theta_test' in locals():
     print(f"\nTheta optimal sur le test (info) : {best_theta_test:.2f}")
     print(f"Gain test correspondant          : {best_gain_test:.1f} h")
     print(f"Risque test correspondant        : {best_risk_test:.4f}")
+
+# Ajout des métriques environnementales
+print(f"\n🌍 Impact environnemental :")
+print(f"   Émissions entraînement : {emissions_training:.4f} kg CO₂eq")
+print(f"   Émissions inférence    : {emissions_inference:.4f} kg CO₂eq")
+print(f"   Total                  : {emissions_training + emissions_inference:.4f} kg CO₂eq")
 
 print(f"\nFichiers produits :")
 print(f"  → predictions_val.csv   ({len(predictions_val):,} lignes)")
