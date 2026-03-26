@@ -48,6 +48,7 @@ Approche **multi-modèle hybride avec stacking** :
 - **Clustering** : scikit-learn KMeans
 - **Métriques** : scikit-learn MAE
 - **Versioning modèles** : joblib
+- **Tracking éco** : CodeCarbon (émissions CO₂)
 - **Visualisation** : (optionnel) Matplotlib, Seaborn
 
 ## 🚀 Installation & exécution
@@ -63,7 +64,7 @@ Approche **multi-modèle hybride avec stacking** :
 cd DataBattle
 
 # 2. Installer les dépendances
-pip install numpy pandas scikit-learn xgboost joblib tqdm
+pip install numpy pandas scikit-learn xgboost joblib tqdm codecarbon
 
 # Optionnel : pour GPU (XGBoost)
 pip install xgboost-gpu
@@ -93,8 +94,9 @@ python model.py
 **Sortie** :
 ```
 segment_alerts_valid.csv           → Validation split
-predictions_val.csv                → Prédictions validation (snapshot_time, predicted_date_end_alert, confidence)
-predictions_test.csv               → Prédictions test
+predictions_val.csv                → Prédictions validation (prediction_date, predicted_date_end_alert, confidence)
+predictions_test.csv               → Prédictions test (prediction_date, true_end_alert, predicted_date_end_alert, confidence)
+co2_emissions.json                 → Émissions CO₂ (entraînement + inférence)
 model_main.pkl                     → Modèle principal (sauvegardé)
 model_low.pkl, model_high.pkl      → Modèles quantiles
 cluster_models.pkl                 → Modèles par cluster
@@ -114,6 +116,29 @@ Ajustez les paramètres dans `model.py` (section CONFIGURATION) :
 | `QUANTILE_LOW` | 0.10 | Quantile bas pour intervalle de confiance |
 | `QUANTILE_HIGH` | 0.95 | Quantile haut pour intervalle de confiance |
 | `R_ACCEPT` | 0.02 | Seuil risque maximal toléré (2%) |
+
+## 🌍 Tracking CO₂ et Impact Environnemental
+
+Le modèle utilise **CodeCarbon** pour mesurer l'empreinte carbone :
+
+- **Entraînement** : Suivi des émissions lors de l'apprentissage des 4 modèles XGBoost (main, quantiles bas/haut, cluster)
+- **Inférence** : Suivi des émissions lors de la prédiction sur le test set
+
+**Résultats sauvegardés dans `co2_emissions.json`** :
+```json
+{
+  "training_kg_co2": 4.845805922623378e-07,
+  "inference_kg_co2": 2.1623245618107487e-06,
+  "training_energy_kwh": null,
+  "inference_energy_kwh": null,
+  "description": "\u00c9missions CO\u2082 pour l'entra\u00eenement et l'inf\u00e9rence sur le jeu de test"
+}
+```
+
+**Interprétation** :
+- `training_kg_co2` : CO₂ produit pendant l'entraînement des modèles
+- `inference_kg_co2` : CO₂ produit pendant les prédictions sur le test
+- Valeurs pour comparaison : 0.01 kg CO₂ ≈ 1 km en voiture
 
 ## 📊 Résultats & Métriques
 
@@ -171,20 +196,35 @@ Scan linéaire de θ ∈ [0.01, 0.99] par pas 0.01 :
 ## ⚠️ Limitations & Améliorations futures
 
 **Limitations actuelles** :
-- Alertes ultra-courtes (< 5 min) non prédites
+- Alertes ultra-courtes (< 5 min) non prédites car MIN_ELAPSED = 5.0
 - Features statiques (pas de séquences) → RNN/LSTM pour évolution temporelle
 - One-hot encoding airport → CatBoost pour traitement natif
 - Seuil θ optimal peut drift sur nouveau test
+- CodeCarbon ne capture que l'énergie CPU/GPU (pas mémoire complète)
 
 **Améliorations possibles** :
 1. Essayer LightGBM / CatBoost / Ensemble
-2. Bayesian Optimization (Optuna) sur hyperparamètres
-3. Isotonic Regression pour meilleure calibration confiance
-4. Modèle séparé pour alertes courtes
-5. Features géographiques avancées (proximité côte, altitude)
-6. Tracking drift en production
+2. Isotonic Regression pour meilleure calibration confiance
+3. Modèle séparé pour alertes courtes
+4. Features géographiques avancées (proximité côte, altitude)
+5. Tracking drift en production
 
-## 📝 Licence & Auteurs
+## � Fichiers de sortie
+
+Après exécution de `model.py`, les fichiers suivants sont générés :
+
+| Fichier | Description |
+|---------|-------------|
+| `segment_alerts_valid.csv` | Split validation (80/20 temporel) |
+| `predictions_val.csv` | Prédictions sur validation (prediction_date, predicted_date_end_alert, confidence) |
+| `predictions_test.csv` | Prédictions sur test (prediction_date, true_end_alert, predicted_date_end_alert, confidence) |
+| `co2_emissions.json` | Émissions CO₂ entraînement + inférence (kg CO₂eq) |
+| `model_main.pkl` | Modèle XGBoost principal (MAE) |
+| `model_low.pkl` | Modèle XGBoost quantile Q10 |
+| `model_high.pkl` | Modèle XGBoost quantile Q95 |
+| `cluster_models.pkl` | Dictionnaire des 5 modèles spécialisés par cluster |
+
+## �📝 Licence & Auteurs
 Data Battle IA PAU 2026 - Tous droits réservés
 
 ---
