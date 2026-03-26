@@ -985,6 +985,65 @@ else:
     print("\nAucun theta sur le test ne respecte R < 0.02 avec gain positif.")
 
 # ============================================================
+# SAUVEGARDE DES FICHIERS POUR LE DASHBOARD
+# ============================================================
+print("\n" + "=" * 70)
+print("Sauvegarde des fichiers pour le dashboard")
+print("=" * 70)
+
+# 1. Cluster stats avec label
+cluster_stats_dashboard = cluster_duration_stats.copy()
+cluster_stats_dashboard.columns = ['cluster', 'Médiane', 'Moyenne', 'Écart-type']
+cluster_stats_dashboard['Label'] = ['Orages courts', 'Orages longs', 'Orages modérés', 'Orages brefs', 'Orages extrêmes']
+cluster_stats_dashboard['Count'] = train_alerts.groupby('cluster').size().values
+cluster_stats_dashboard.to_csv('cluster_stats.csv', index=False)
+print("→ cluster_stats.csv sauvegardé")
+
+valid_snapshots['true_remaining_min'] = valid_snapshots['remaining_min']
+valid_snapshots['predicted_remaining_min'] = valid_snapshots['predicted_remaining']
+valid_snapshots['error'] = valid_snapshots['predicted_remaining'] - valid_snapshots['remaining_min']
+# 2. Theta results (déjà dans theta_df, mais renommons les colonnes)
+theta_df = pd.DataFrame({
+    'θ': list(gains.keys()),
+    'Gain (h)': list(gains.values()),
+    'Risque R': list(risks.values())
+})
+theta_df.to_csv('theta_results.csv', index=False)
+print("→ theta_results.csv sauvegardé")
+
+# 3. Feature importance (modèle principal)
+importance = model_main.get_score(importance_type='gain')
+importance_df = pd.DataFrame({
+    'Feature': list(importance.keys()),
+    'Importance': list(importance.values())
+}).sort_values('Importance', ascending=False)
+importance_df.to_csv('feature_importance.csv', index=False)
+print("→ feature_importance.csv sauvegardé")
+
+# 4. Distribution des confiances (validation)
+conf_dist = pd.cut(valid_snapshots['confidence'], bins=10, labels=False)
+conf_counts = conf_dist.value_counts().sort_index()
+conf_df = pd.DataFrame({
+    'Plage': [f"{i/10:.1f}–{(i+1)/10:.1f}" for i in range(10)],
+    'Snapshots': conf_counts.values
+})
+conf_df.to_csv('confidence_dist.csv', index=False)
+print("→ confidence_dist.csv sauvegardé")
+
+# 5. Snapshots de validation avec prédictions et erreur
+#   valid_snapshots contient déjà les colonnes nécessaires.
+#   On garde seulement les colonnes utiles pour le dashboard.
+dashboard_snapshots = valid_snapshots[['time_elapsed', 'remaining_min', 'predicted_remaining',
+                                       'true_remaining_min', 'predicted_remaining_min', 'error']].copy()
+dashboard_snapshots.to_csv('valid_snapshots_dashboard.csv', index=False)
+print("→ valid_snapshots_dashboard.csv sauvegardé")
+
+# 6. Si le test est disponible, on peut sauvegarder aussi les snapshots test (optionnel)
+if 'test_snapshots' in locals():
+    test_dashboard = test_snapshots[['time_elapsed', 'remaining_min', 'predicted_remaining']].copy()
+    test_dashboard.to_csv('test_snapshots_dashboard.csv', index=False)
+    print("→ test_snapshots_dashboard.csv sauvegardé")
+# ============================================================
 # 17. RÉSUMÉ FINAL
 # ============================================================
 print("\n" + "=" * 70)
