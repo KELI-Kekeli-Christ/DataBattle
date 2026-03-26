@@ -268,12 +268,11 @@ tab_results, tab_clusters, tab_theta, tab_predictions, tab_carbon = st.tabs([
 # ═══════════════════════════════════════════
 with tab_results:
     # KPIs
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4 = st.columns(4)
     k1.metric("MAE Stacking (val)", f"{mae_val:.2f} min" if mae_val is not None else "N/A")
-    k2.metric("MAE Stacking (test)", f"{mae_test:.2f} min" if mae_test is not None else "N/A")
-    k3.metric("Gain validation", f"{best_theta_row['Gain (h)']:.1f} h", delta=f"θ = {best_theta_row['θ']:.2f}")
-    k4.metric("Risque R", f"{best_theta_row['Risque R']*100:.2f} %", delta="< 2.0% ✓" if best_theta_row['Risque R'] < R_ACCEPT else "≥ 2.0% ✗")
-    k5.metric("Snapshots val.", f"{len(predictions_val):,}", delta="alertes aéroports")
+    k2.metric("Gain validation", f"{best_theta_row['Gain (h)']:.1f} h", delta=f"θ = {best_theta_row['θ']:.2f}")
+    k3.metric("Risque R", f"{best_theta_row['Risque R']*100:.2f} %", delta="< 2.0% ✓" if best_theta_row['Risque R'] < R_ACCEPT else "≥ 2.0% ✗")
+    k4.metric("Snapshots val.", f"{len(predictions_val):,}", delta="alertes aéroports")
 
     st.markdown("---")
 
